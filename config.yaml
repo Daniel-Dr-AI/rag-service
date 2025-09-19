@@ -1,0 +1,4 @@
+top_k: 5
+chunk_size: 1200
+chunk_overlap: 200
+model: gpt-4o-mini
