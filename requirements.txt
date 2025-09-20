@@ -8,6 +8,5 @@ tiktoken
 twilio
 python-multipart
 sentence-transformers
-faiss-cpu
 pypdf
 python-docx
