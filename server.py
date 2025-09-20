@@ -3,7 +3,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 import agent
-import json
+import os
 import logging
 
 # ------------------------
@@ -15,6 +15,12 @@ app = FastAPI(title="Bilingual RAG Agent")
 # Logging setup
 # ------------------------
 logging.basicConfig(level=logging.INFO)
+
+# Check for API key (safe check)
+if os.getenv("OPENAI_API_KEY"):
+    logging.info("OPENAI_API_KEY loaded ✅")
+else:
+    logging.warning("OPENAI_API_KEY is NOT set ❌ — embeddings will fail.")
 
 # ------------------------
 # Schema for /ask
@@ -37,51 +43,45 @@ def health():
 # ------------------------
 @app.post("/ask")
 def ask(request: QueryRequest):
-    try:
-        result = agent.agent_run(
-            user_query=request.question,
-            max_steps=request.steps,
-            top_k=request.top_k,
-            model=request.model
-        )
-        return result  # full JSON for API clients
-    except Exception as e:
-        logging.exception("Error in /ask endpoint")
-        return {"status": "error", "message": str(e)}
+    result = agent.agent_run(
+        user_query=request.question,
+        max_steps=request.steps,
+        top_k=request.top_k,
+        model=request.model
+    )
+    return result  # return full structured JSON for API clients
 
 # ------------------------
 # Twilio SMS webhook
 # ------------------------
 @app.post("/sms")
 async def sms_reply(From: str = Form(...), Body: str = Form(...)):
-    try:
-        # Run the agent pipeline
-        result = agent.agent_run(
-            user_query=Body,
-            max_steps=6,
-            top_k=5,
-            model="gpt-4o-mini"
-        )
+    # Run the agent with explicit instruction
+    result = agent.agent_run(
+        user_query=Body + " (Answer in one short sentence.)",
+        max_steps=6,
+        top_k=5,
+        model="gpt-4o-mini"
+    )
 
-        # Log the full result for debugging (won’t be sent to user)
-        logging.info("Agent result: %s", json.dumps(result, indent=2))
+    final_answer = result.get("final", {}).get("answer", {}).get(
+        "english",
+        "Sorry, I couldn’t process that."
+    )
 
-        # Extract just the English answer
-        final_answer = (
-            result.get("final", {})
-                  .get("answer", {})
-                  .get("english", "Sorry, I couldn’t process that.")
-        )
+    # 🪓 Force single sentence by cutting at first period
+    if "." in final_answer:
+        final_answer = final_answer.split(".")[0].strip() + "."
 
-    except Exception as e:
-        logging.exception("Error in /sms endpoint")
-        final_answer = "Something went wrong, please try again later."
+    # Safety: trim to 200 chars max
+    final_answer = final_answer[:200]
 
     # Build Twilio-compatible XML response
     resp = MessagingResponse()
     resp.message(final_answer)
 
     return Response(content=str(resp), media_type="application/xml")
+
 
 # ------------------------
 # Optional root route
