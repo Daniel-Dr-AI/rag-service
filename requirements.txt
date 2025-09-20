@@ -7,6 +7,5 @@ pydantic
 tiktoken
 twilio
 python-multipart
-sentence-transformers
 pypdf
 python-docx

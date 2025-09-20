@@ -2,10 +2,9 @@ import os
 from pathlib import Path
 import pickle
 import numpy as np
-
 from pypdf import PdfReader
 import docx
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 import faiss
 
 # ------------------------
@@ -16,9 +15,8 @@ INDEX_FOLDER = Path("vectorstore")
 INDEX_FILE = INDEX_FOLDER / "faiss.index"
 CHUNKS_FILE = INDEX_FOLDER / "chunks.pkl"
 
-# Use Hugging Face embeddings
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-embedder = SentenceTransformer(EMBEDDING_MODEL)
+EMBEDDING_MODEL = "text-embedding-3-small"
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ------------------------
 # Load and extract text
@@ -57,8 +55,14 @@ def chunk_texts(texts, chunk_size=1000, overlap=100):
 # Embeddings
 # ------------------------
 def embed_chunks(chunks):
-    embeddings = embedder.encode(chunks, convert_to_numpy=True, show_progress_bar=True)
-    return embeddings.astype("float32")
+    vectors = []
+    batch_size = 100
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i+batch_size]
+        resp = client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
+        for e in resp.data:
+            vectors.append(e.embedding)
+    return np.array(vectors).astype("float32")
 
 # ------------------------
 # Build or update FAISS
@@ -68,21 +72,16 @@ def build_or_update_index(vectors, chunks):
     INDEX_FOLDER.mkdir(exist_ok=True)
 
     if INDEX_FILE.exists() and CHUNKS_FILE.exists():
-        # load existing index and chunks
         index = faiss.read_index(str(INDEX_FILE))
         with open(CHUNKS_FILE, "rb") as f:
             old_chunks = pickle.load(f)
-
-        # append new vectors + chunks
         index.add(vectors)
         all_chunks = old_chunks + chunks
     else:
-        # fresh index
         index = faiss.IndexFlatL2(dim)
         index.add(vectors)
         all_chunks = chunks
 
-    # save index + chunks
     faiss.write_index(index, str(INDEX_FILE))
     with open(CHUNKS_FILE, "wb") as f:
         pickle.dump(all_chunks, f)
@@ -100,7 +99,7 @@ if __name__ == "__main__":
     print(f"Split into {len(chunks)} chunks.")
 
     vectors = embed_chunks(chunks)
-    print(f"Created {vectors.shape[0]} embeddings.")
+    print(f"Created {vectors.shape[0]} embeddings with OpenAI.")
 
     build_or_update_index(vectors, chunks)
     print("Ingestion complete.")
