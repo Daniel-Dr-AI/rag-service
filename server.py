@@ -3,11 +3,21 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 import agent
+import json
+import logging
 
+# ------------------------
+# FastAPI app
+# ------------------------
 app = FastAPI(title="Bilingual RAG Agent")
 
 # ------------------------
-# API schema for /ask
+# Logging setup
+# ------------------------
+logging.basicConfig(level=logging.INFO)
+
+# ------------------------
+# Schema for /ask
 # ------------------------
 class QueryRequest(BaseModel):
     question: str
@@ -27,30 +37,49 @@ def health():
 # ------------------------
 @app.post("/ask")
 def ask(request: QueryRequest):
-    result = agent.agent_run(
-        user_query=request.question,
-        max_steps=request.steps,
-        top_k=request.top_k,
-        model=request.model
-    )
-    return {"answer": result}
+    try:
+        result = agent.agent_run(
+            user_query=request.question,
+            max_steps=request.steps,
+            top_k=request.top_k,
+            model=request.model
+        )
+        return result  # full JSON for API clients
+    except Exception as e:
+        logging.exception("Error in /ask endpoint")
+        return {"status": "error", "message": str(e)}
 
 # ------------------------
 # Twilio SMS webhook
 # ------------------------
 @app.post("/sms")
 async def sms_reply(From: str = Form(...), Body: str = Form(...)):
-    # Pass the incoming SMS text into your RAG agent
-    result = agent.agent_run(
-        user_query=Body,
-        max_steps=6,
-        top_k=5,
-        model="gpt-4o-mini"
-    )
+    try:
+        # Run the agent pipeline
+        result = agent.agent_run(
+            user_query=Body,
+            max_steps=6,
+            top_k=5,
+            model="gpt-4o-mini"
+        )
 
-    # Build a Twilio-compatible XML response
+        # Log the full result for debugging (won’t be sent to user)
+        logging.info("Agent result: %s", json.dumps(result, indent=2))
+
+        # Extract just the English answer
+        final_answer = (
+            result.get("final", {})
+                  .get("answer", {})
+                  .get("english", "Sorry, I couldn’t process that.")
+        )
+
+    except Exception as e:
+        logging.exception("Error in /sms endpoint")
+        final_answer = "Something went wrong, please try again later."
+
+    # Build Twilio-compatible XML response
     resp = MessagingResponse()
-    resp.message(result)
+    resp.message(final_answer)
 
     return Response(content=str(resp), media_type="application/xml")
 
